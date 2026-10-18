@@ -1,9 +1,9 @@
 name: 发布到 B 站 Toy
 
-# 每天一次，把最新快照打包送审。
+# 手动触发一次，把最新快照打包送审。
 #
 # 每次送审都要平台人工过一遍，所以不跟着同步管线每 12 小时跑：
-# 每天最多一次，而且只在页面内容真有变化时才送（判据见 scripts/toy/should-publish.ts）。
+# 只在页面内容真有变化时才送（判据见 scripts/toy/should-publish.ts）。
 # 上一版被驳回时不自动重发，直接失败开 issue，等人看过再说。
 #
 # 登录凭据放在仓库 Secret `TOY_CLI_SESSION_TOKEN`，就是本机 ~/.toy/session.json 里的 session_token。
@@ -12,9 +12,8 @@ name: 发布到 B 站 Toy
 # 这个工作流只响应定时与手动触发，外部 PR 拿不到这个 Secret。
 
 on:
-  schedule:
-    # 02:30 UTC = 北京时间 10:30，排在早上那次同步（09:40）之后，也落在平台审核的工作时间里
-    - cron: '30 2 * * *'
+  # 定时触发已关闭：发布到 B 站 Toy 需要仓库 Secret `TOY_CLI_SESSION_TOKEN`（原作者账号的登录凭据）。
+  # 在缺少该 Secret 的仓库里，每天自动跑只会失败、并在 issue 里刷屏。需要时点「Run workflow」手动触发。
   workflow_dispatch:
     inputs:
       force:
