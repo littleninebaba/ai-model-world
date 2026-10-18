@@ -1,0 +1,122 @@
+name: 发布到 B 站 Toy
+
+# 每天一次，把最新快照打包送审。
+#
+# 每次送审都要平台人工过一遍，所以不跟着同步管线每 12 小时跑：
+# 每天最多一次，而且只在页面内容真有变化时才送（判据见 scripts/toy/should-publish.ts）。
+# 上一版被驳回时不自动重发，直接失败开 issue，等人看过再说。
+#
+# 登录凭据放在仓库 Secret `TOY_CLI_SESSION_TOKEN`，就是本机 ~/.toy/session.json 里的 session_token。
+# 过期后「判断」那一步会报「尚未登录」：本机重新 `toy login`，再执行
+#   node -p 'require(process.env.HOME+"/.toy/session.json").session_token' | gh secret set TOY_CLI_SESSION_TOKEN
+# 这个工作流只响应定时与手动触发，外部 PR 拿不到这个 Secret。
+
+on:
+  schedule:
+    # 02:30 UTC = 北京时间 10:30，排在早上那次同步（09:40）之后，也落在平台审核的工作时间里
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 内容没变也送审
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: toy
+  cancel-in-progress: false
+
+env:
+  TOY_ID: '34090174887936'
+  # 固定版本，升级 CLI 时改这里（最新版本号：https://boss.hdslb.com/toy-cli/toy/latest/VERSION）
+  TOY_CLI_VERSION: v0.6.1
+  TOY_NO_UPDATE_CHECK: '1'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: 安装 toy CLI
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/toy" "https://boss.hdslb.com/toy-cli/toy/releases/${TOY_CLI_VERSION}/toy_linux_amd64"
+          chmod +x "$RUNNER_TEMP/toy"
+          echo "TOY_BIN=$RUNNER_TEMP/toy" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/toy" version
+
+      - name: 判断要不要送审
+        id: decide
+        env:
+          TOY_CLI_SESSION_TOKEN: ${{ secrets.TOY_CLI_SESSION_TOKEN }}
+          FORCE: ${{ inputs.force }}
+        run: npx tsx scripts/toy/should-publish.ts
+
+      - name: 安装浏览器
+        if: steps.decide.outputs.publish == 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: 打包
+        if: steps.decide.outputs.publish == 'true'
+        run: npm run assets && npm run toy:build
+
+      # 发版闸门：把包挂到与线上同构的版本化路径下，用真实浏览器把每个控件点一遍
+      - name: 自检
+        if: steps.decide.outputs.publish == 'true'
+        run: npm run toy:verify
+
+      - name: 提交审核
+        if: steps.decide.outputs.publish == 'true'
+        env:
+          TOY_CLI_SESSION_TOKEN: ${{ secrets.TOY_CLI_SESSION_TOKEN }}
+        run: '"$TOY_BIN" update "$TOY_ID" .toy-pkg --yes'
+
+      - name: 失败时开 issue
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = 'B 站 Toy 自动发布失败';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              `### ${new Date().toISOString()}`,
+              '',
+              `运行链接：${runUrl}`,
+              '',
+              '常见原因：上一版被驳回（先人工处理再手动发布一次）、登录凭据过期（本机 `toy login` 后更新 Secret，命令见工作流文件顶部）、自检没过。',
+            ].join('\n');
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const existing = issues.find((i) => i.title === title && !i.pull_request);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body: ['`.github/workflows/toy.yml` 运行失败，每次失败都会在这里追加评论，修好后手动关闭。', '', body].join('\n'),
+              });
+            }
