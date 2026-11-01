@@ -516,6 +516,15 @@ export const POKEMON_REGISTRY: Record<string, PokemonSpec> = {
   unbiased: gen5('metagross', '巨金怪', 376),
   undi95: showdown('rillaboom', '轰擂金刚猩', 812),
   vivgrid: gen5('porygon2', '多边兽乙型', 233),
+
+  // ── 新厂商（按候选池顺序分配，2026-11） ────────────────────
+  abacusai: showdown('mudsdale', '重泥挽马', 750),
+  'aleph-alpha': gen5('scizor', '巨钳螳螂', 212),
+  'black-forest-labs': gen5('gardevoir', '沙奈朵', 282),
+  canopylabs: gen5('sableye', '勾魂眼', 302),
+  essentialai: gen5('manectric', '雷电兽', 310),
+  lightonai: gen5('salamence', '暴飞龙', 373),
+  recursive: gen5('rayquaza', '裂空座', 384),
 };
 
 /**
@@ -524,6 +533,8 @@ export const POKEMON_REGISTRY: Record<string, PokemonSpec> = {
  * 以后 `data/models.json` 里多出未登记的厂商时，**从数组头部依次取一个**：
  * 把该项从本池删掉，改成 `厂商 id: <该项>` 写进 POKEMON_REGISTRY 即可。
  * 顺序即优先级，不要打乱；取完为止。
+ * 2026-11 已按顺序取走前 7 个（abacusai / aleph-alpha / black-forest-labs / canopylabs /
+ * essentialai / lightonai / recursive），所以现在从「代欧奇希斯-速度的样子」开始。
  *
  * 三个形态走的是 PokeAPI 的独立条目：
  * - 代欧奇希斯-速度的样子：第 5 世代动画里的 `386-speed.gif`；
@@ -531,13 +542,6 @@ export const POKEMON_REGISTRY: Record<string, PokemonSpec> = {
  * - 索罗亚克-洗翠的样子：洗翠形态在 PokeAPI 用独立图鉴号 10239（Showdown 动画）。
  */
 export const POKEMON_CANDIDATES: PokemonSpec[] = [
-  showdown('mudsdale', '重泥挽马', 750),
-  gen5('scizor', '巨钳螳螂', 212),
-  gen5('gardevoir', '沙奈朵', 282),
-  gen5('sableye', '勾魂眼', 302),
-  gen5('manectric', '雷电兽', 310),
-  gen5('salamence', '暴飞龙', 373),
-  gen5('rayquaza', '裂空座', 384),
   gen5('deoxys-speed', '代欧奇希斯-速度的样子', '386-speed'),
   gen5('lopunny', '长耳兔', 428),
   gen5('weavile', '玛狃拉', 461),
