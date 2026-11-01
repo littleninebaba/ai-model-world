@@ -50,10 +50,15 @@ export interface PokemonSpec {
   loopStart?: number;
   /**
    * 演示用开关：无视厂商各模型的真实能力，把这一个物种的道具栏强制点亮 4 件。
-   * 仅用于「一列看满 4 件道具」的示范（阿尔宙斯用），会让 manifest 的 flags
+   * 仅用于「一列看满 4 件道具」的示范，会让 manifest 的 flags
    * 与该模型真实能力不符；正常物种不要打开。
    */
   demoAllProps?: boolean;
+  /**
+   * 可选：把该物种的内容高度单独归一到这个像素值（默认 TARGET_CONTENT_H）。
+   * 只影响纵向；宽度预算（道具列）仍是硬上限，所以特别宽的物种调大它也不会更宽。
+   */
+  fitHeight?: number;
 }
 
 /** 已解码、并量好居中偏移的物种资源；所有帧尺寸一致。 */
@@ -150,7 +155,17 @@ async function scaleFrames(frames: Raster[], scale: number): Promise<Raster[]> {
   return out;
 }
 
-/** 拉取并解码一个物种，算出把它摆进 64 px 格子的偏移（超格则先等比缩小）。构建期联网一次。 */
+/**
+ * 主帧内容高度统一归一到这个值（64 px 格内）。实测 chibi 角色身高 56–58px，
+ * 取 56 让宝可梦与回退到 chibi 的厂商站在同一排时高度一致。
+ */
+const TARGET_CONTENT_H = 56;
+/** 允许的最大放大倍数。小图放太大块状明显，2.2 倍以内尚可接受。 */
+const MAX_UPSCALE = 2.2;
+/** 内容底边离格子底部的留白，用来把所有角色对齐到同一条地平线。 */
+const GROUND_PAD = 2;
+
+/** 拉取并解码一个物种，按内容高度归一并算出摆进 64 px 格子的偏移。构建期联网一次。 */
 export async function loadPokemonAsset(spec: PokemonSpec): Promise<PokemonAsset> {
   const decoded = await decodeAnimatedGif(spec.animated);
   if (decoded.frames.length === 0) throw new Error(`no frames decoded for ${spec.key}`);
@@ -164,34 +179,52 @@ export async function loadPokemonAsset(spec: PokemonSpec): Promise<PokemonAsset>
   for (let c = 0; c < COLUMNS; c++) usedFrames.add((loopStart + c) % decoded.frames.length);
 
   let frames = decoded.frames;
-  let content = measureContent(frames, usedFrames);
-  if (!content) throw new Error(`${spec.key}: no visible pixels in the frames that go into the sheet`);
+  const union = measureContent(frames, usedFrames);
+  if (!union) throw new Error(`${spec.key}: no visible pixels in the frames that go into the sheet`);
+  const stand = measureContent(frames, [standIndex]);
+  if (!stand) throw new Error(`${spec.key}: no visible pixels in the standing frame`);
+  let content = union;
 
-  // 缩放上限同时受三方约束：内容要塞得下（留出右侧道具列 availW），整帧也不能溢出格子。
-  // 小体型的物种 scale 取到 1 → 不缩放；阿尔宙斯那种超格的大体型则按比例收进来。
-  const contentW = content.maxX - content.minX + 1;
-  // 最近邻缩放会把内容宽度四舍五入，可能正好顶到道具列上（实测丰蜜龙收完是 57px，57+8>64）。
-  // 宽度预算里留 1px 余量，保证缩放后内容 ≤ 56px，道具列永远放得下。
-  const scale = Math.min(
-    (CELL - PROP_LANE - 1) / contentW,
-    CELL / frames[0].width,
-    CELL / frames[0].height,
-    1,
-  );
-  if (scale < 1) {
+  // ── 体型归一：按「主帧内容高度」而不是宽度 ─────────────────────────────
+  // 宝可梦的宽高比差异极大（展翅的伊裴尔塔尔 52×18 vs 细高的千面避役 19×63）。
+  // 旧逻辑按「所有入图帧并集的宽度」压到 56px：展翅的被压成小点、细高的顶满格子，
+  // 而且动画里抬手的帧会抬高并集高度，把主帧一起拖小。
+  // 现在高度按**主帧**归一到 TARGET_CONTENT_H；并集只用来约束宽度与格子溢出。
+  const standH = stand.maxY - stand.minY + 1;
+  const unionW = union.maxX - union.minX + 1;
+  const targetH = spec.fitHeight ?? TARGET_CONTENT_H;
+  const widthBudget = CELL - PROP_LANE - 1;
+  const scale = Math.max(0.05, Math.min(targetH / standH, widthBudget / unionW, MAX_UPSCALE));
+
+  if (Math.abs(scale - 1) > 0.01) {
     frames = await scaleFrames(frames, scale);
     const rescanned = measureContent(frames, usedFrames);
-    if (!rescanned) throw new Error(`${spec.key}: sprite vanished after downscaling`);
+    if (!rescanned) throw new Error(`${spec.key}: sprite vanished after rescaling`);
     content = rescanned;
   }
 
-  const fitW = content.maxX - content.minX + 1;
-  const fitH = content.maxY - content.minY + 1;
-  if (fitW + PROP_LANE > CELL || fitH > CELL || frames[0].width > CELL || frames[0].height > CELL) {
+  let fitW = content.maxX - content.minX + 1;
+  let fitH = content.maxY - content.minY + 1;
+  // 最近邻缩放的取整可能顶出 1px；并集超宽或动画帧高过格子时再收一档。
+  const corrective = Math.min(widthBudget / fitW, CELL / fitH);
+  if (corrective < 1) {
+    frames = await scaleFrames(frames, corrective);
+    const rescanned = measureContent(frames, usedFrames);
+    if (!rescanned) throw new Error(`${spec.key}: sprite vanished after fit correction`);
+    content = rescanned;
+    fitW = content.maxX - content.minX + 1;
+    fitH = content.maxY - content.minY + 1;
+  }
+  if (fitW > widthBudget || fitH > CELL) {
     throw new Error(`${spec.key}: sprite is ${fitW}x${fitH}px, no room for the ${PROP_LANE}px prop lane`);
   }
 
-  return { spec, frames, dx: -content.minX, dy: Math.round((CELL - frames[0].height) / 2) };
+  // 水平：在道具列左侧的可用宽度里居中（细高物种若贴死左边会留出大片空白）。
+  const dx = -content.minX + Math.max(0, Math.floor((CELL - PROP_LANE - fitW) / 2));
+  // 垂直：内容底边对齐到同一条地平线，而不是按整帧居中——所有角色才踩在同一条线上。
+  const dy = CELL - GROUND_PAD - (content.maxY + 1);
+
+  return { spec, frames, dx, dy };
 }
 
 // ── 锚点实测（供皇冠 / 光环 / 雾 / 闪光定位） ──────────────────
