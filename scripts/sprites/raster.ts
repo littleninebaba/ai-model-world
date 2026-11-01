@@ -47,10 +47,20 @@ export function over(dst: Raster, src: Raster, alpha = 1): void {
 }
 
 export function blit(dst: Raster, src: Raster, sx: number, sy: number, w: number, h: number, dx: number, dy: number): void {
-  for (let y = 0; y < h; y++) {
-    const from = ((sy + y) * src.width + sx) * 4;
-    const to = ((dy + y) * dst.width + dx) * 4;
-    src.data.copy(dst.data, to, from, from + w * 4);
+  // 目标位置可能是负的（把宝可梦按内容包围盒左对齐时 dx = -content.minX），也可能溢出格子。
+  // 先裁到目标画布范围内，再逐行拷贝，避免 Buffer.copy 的负偏移报错。
+  const x0 = Math.max(0, dx);
+  const y0 = Math.max(0, dy);
+  const x1 = Math.min(dst.width, dx + w);
+  const y1 = Math.min(dst.height, dy + h);
+  if (x1 <= x0 || y1 <= y0) return;
+  const offsetX = x0 - dx;
+  const offsetY = y0 - dy;
+  const width = x1 - x0;
+  for (let y = y0; y < y1; y++) {
+    const from = ((sy + offsetY + (y - y0)) * src.width + sx + offsetX) * 4;
+    const to = (y * dst.width + x0) * 4;
+    src.data.copy(dst.data, to, from, from + width * 4);
   }
 }
 

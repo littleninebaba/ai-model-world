@@ -24,6 +24,7 @@ import {
 import { pickLiteLlmField, pickLiteLlmModalities } from '../sources/litellm';
 import { codingLeagueRank } from '../sources/models-dev';
 import type {
+  EpochMatch,
   EpochResult,
   GatewayFacts,
   GatewayModel,
@@ -232,6 +233,21 @@ export function stripServiceTierSuffix(modelSlug: string): string | null {
     }
   }
   return null;
+}
+
+/**
+ * Epoch 的发布日期只有命中「本模型的同名实体」时才可信。宽松档命中说明 Epoch 里没有本模型的
+ * slug，命中的是被剥掉日期戳/后缀的基础版或别的快照，它的日期不属于本模型——实测
+ * deepseek-v4.1-flash-1017 因此继承了基础版 Flash 的 2026-09-09（models.dev 自己写的是 10-17）。
+ * 只有 models.dev 也没给日期时，才拿这条宽松命中兜底（此时 Epoch 仍是唯一发布语义源）。
+ */
+export function epochDateIsTrusted(input: {
+  tier: EpochMatch['tier'] | null;
+  modelsDevHasReleaseDate: boolean;
+}): boolean {
+  if (input.tier === null) return false;
+  if (!input.modelsDevHasReleaseDate) return true;
+  return input.tier !== 'loose';
 }
 
 export async function buildSnapshot(input: BuildInput): Promise<BuildOutput> {
@@ -482,8 +498,14 @@ export async function buildSnapshot(input: BuildInput): Promise<BuildOutput> {
     if (md?.releaseDate) {
       dateCandidates.push({ source: 'models.dev', value: md.releaseDate, anchor: true });
     }
-    if (epochHit?.releaseDate) {
-      dateCandidates.push({ source: 'epoch.ai', value: epochHit.releaseDate, anchor: true });
+    // Epoch 的发布日期只有命中「本模型的同名实体」时才可信（见 epochDateIsTrusted）。
+    const epochDate = epochHit?.releaseDate ?? null;
+    const epochDateTrusted = epochDateIsTrusted({
+      tier: epochMatch?.tier ?? null,
+      modelsDevHasReleaseDate: Boolean(md?.releaseDate),
+    });
+    if (epochDate && epochDateTrusted) {
+      dateCandidates.push({ source: 'epoch.ai', value: epochDate, anchor: true });
     }
     if (vc?.releaseDate) {
       dateCandidates.push({ source: 'vercel-gateway', value: vc.releaseDate, anchor: false });

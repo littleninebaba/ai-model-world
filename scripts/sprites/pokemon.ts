@@ -11,7 +11,7 @@
  * 用法：在 `POKEMON_REGISTRY` 里把某个厂商 id 指向一个 `PokemonSpec`，
  * 该厂商的所有模型就会用这张图；未登记的厂商照常走 chibi。
  *
- * 换形象只改一处：往 `POKEMON_REGISTRY` 加一行（厂商 id → 物种 + 动图路径）。
+ * 换形象只改一处：往 `POKEMON_REGISTRY` 加一行（厂商 id → 物种，用 gen5/showdown/staticSprite 指明图源）。
  *
  * ⚠️ 版权提醒：宝可梦是任天堂 / Game Freak / The Pokémon Company 的 IP。
  * 本地自己玩没问题；若要公开发布，请换成原创或已授权形象。
@@ -156,8 +156,8 @@ export async function loadPokemonAsset(spec: PokemonSpec): Promise<PokemonAsset>
   if (decoded.frames.length === 0) throw new Error(`no frames decoded for ${spec.key}`);
 
   // 精灵整体靠左摆，右侧让出 PROP_LANE 宽的一条竖列专门放能力道具（见 drawAbilityLane）。
-  // 轮廓只统计「真正会进 sheet 的帧」：stand + 九帧循环。动图里其余帧（六尾共 47 帧）
-  // 并不会被摆进图，若一并算进来会误报超宽（六尾全帧并集 x0..59，但用到的那 9 帧只有 x0..55）。
+  // 轮廓只统计「真正会进 sheet 的帧」：stand + 九帧循环。动图里其余帧（有的物种多达数十帧）
+  // 并不会被摆进图，若一并算进来会误报超宽（全帧并集会比实际用到的那 9 帧更大）。
   const standIndex = spec.standFrame ?? STAND;
   const loopStart = spec.loopStart ?? LOOP;
   const usedFrames = new Set<number>([standIndex]);
@@ -168,10 +168,16 @@ export async function loadPokemonAsset(spec: PokemonSpec): Promise<PokemonAsset>
   if (!content) throw new Error(`${spec.key}: no visible pixels in the frames that go into the sheet`);
 
   // 缩放上限同时受三方约束：内容要塞得下（留出右侧道具列 availW），整帧也不能溢出格子。
-  // 六尾本身够小，scale 取到 1 → 不缩放；阿尔宙斯则按比例收进来。
+  // 小体型的物种 scale 取到 1 → 不缩放；阿尔宙斯那种超格的大体型则按比例收进来。
   const contentW = content.maxX - content.minX + 1;
-  const contentH = content.maxY - content.minY + 1;
-  const scale = Math.min((CELL - PROP_LANE) / contentW, CELL / frames[0].width, CELL / frames[0].height, 1);
+  // 最近邻缩放会把内容宽度四舍五入，可能正好顶到道具列上（实测丰蜜龙收完是 57px，57+8>64）。
+  // 宽度预算里留 1px 余量，保证缩放后内容 ≤ 56px，道具列永远放得下。
+  const scale = Math.min(
+    (CELL - PROP_LANE - 1) / contentW,
+    CELL / frames[0].width,
+    CELL / frames[0].height,
+    1,
+  );
   if (scale < 1) {
     frames = await scaleFrames(frames, scale);
     const rescanned = measureContent(frames, usedFrames);
@@ -226,10 +232,9 @@ function rowSpan(src: Raster, y: number): { min: number; max: number } | null {
 }
 
 /**
- * 从主帧估锚点。六尾是四足兽：脑袋在左上角，身体与三条尾巴在右侧，
- * 无法像 chibi 那样按图层切出「头部」，所以改用轮廓法——
- * 从上往下扫，第一个「明显变宽」的行就是肩线（尾巴/身体的起点），
- * 肩线以上即视作头部。这样王冠与光环会落在耳朵上，而不是横跨整只狐狸。
+ * 从主帧估锚点。物种姿态各异（四足 / 双足 / 悬空），无法像 chibi 那样按图层切出「头部」，
+ * 所以改用轮廓法——从上往下扫，第一个「明显变宽」的行就是肩线（身体/附件展开处），
+ * 肩线以上即视作头部。这样王冠与光环会落在头上，而不是横跨整只精灵。
  */
 function anchorsOf(cell: Raster): SpriteAnchors {
   const body = bounds(cell, 0, 0, CELL, CELL);
@@ -347,8 +352,8 @@ function bakeCell(asset: PokemonAsset, index: number, flags: ChibiFlags): Raster
 /**
  * 拼出 576 × 320、9×5 的整张 sheet。
  * row 0 放主帧（静态展示）；row 1–4 放同一段九帧循环——
- * 前端的四向行走行共用同一段，六尾本来也只有正面朝向。
- * 锚点只按狐狸本身实测（不含道具），否则王冠 / 光环会被右侧道具带偏。
+ * 前端的四向行走行共用同一段（素材只有正面朝向）。
+ * 锚点只按精灵本身实测（不含道具），否则王冠 / 光环会被右侧道具带偏。
  */
 export function renderPokemonSheet(asset: PokemonAsset, flags: ChibiFlags): { sheet: Raster; anchors: SpriteAnchors } {
   const anchors = anchorsOf(bakeFrame(asset, asset.spec.standFrame ?? STAND));
@@ -367,25 +372,117 @@ export function renderPokemonSheet(asset: PokemonAsset, flags: ChibiFlags): { sh
 
 // ── 「厂商 → 宝可梦」映射表 ─────────────────────────────────────
 
+/**
+ * 图鉴号 1–649 有第 5 世代（黑白）全套动画 GIF，像素风与 chibi 最接近，优先用它。
+ * 括号里的数字是图鉴号，也是 GIF 文件名。
+ */
+function gen5(key: string, name: string, dex: number): PokemonSpec {
+  return {
+    key,
+    name,
+    note: `PokeAPI/sprites 第 5 世代动画${name}（#${dex}）`,
+    animated: `pokemon/versions/generation-v/black-white/animated/${dex}.gif`,
+  };
+}
+
+/** 图鉴号 650+ 没有第 5 世代动图，改用 Showdown 动画（同为多帧 GIF，画风不同）。 */
+function showdown(key: string, name: string, dex: number): PokemonSpec {
+  return {
+    key,
+    name,
+    note: `PokeAPI/sprites Showdown 动画${name}（#${dex}）`,
+    animated: `pokemon/other/showdown/${dex}.gif`,
+  };
+}
+
+/** Showdown 也缺图时退回正面静态精灵（单帧 PNG，仍能正常合成）。 */
+function staticSprite(key: string, name: string, dex: number): PokemonSpec {
+  return {
+    key,
+    name,
+    note: `PokeAPI/sprites 正面静态精灵${name}（#${dex}，Showdown 无动图）`,
+    animated: `pokemon/${dex}.png`,
+  };
+}
+
 /** 在这个表里加一行（厂商 id → 物种），该厂商所有模型就会用宝可梦形象。 */
 export const POKEMON_REGISTRY: Record<string, PokemonSpec> = {
-  anthropic: {
-    key: 'vulpix',
-    name: '六尾',
-    note: 'PokeAPI/sprites 第 5 世代动画六尾（Vulpix #37），60×50、47 帧 GIF 合成',
-    animated: 'pokemon/versions/generation-v/black-white/animated/37.gif',
-  },
-  // 阿里（Qwen）能力最全且带开源权重，适合当「满列道具」示范：整条厂商线并集=4，
-  // 但没有任何单一模型四样全占（最多 3），故开 demoAllProps 让阿尔宙斯固定亮齐 4 件，
-  // 专门用来看满列效果。阿尔宙斯 #493 原图 69×82 比 64 px 格子还大，
-  // loadPokemonAsset 会自动等比缩小再摆。
-  alibaba: {
-    key: 'arceus',
-    name: '阿尔宙斯',
-    note: 'PokeAPI/sprites 第 5 世代动画阿尔宙斯（Arceus #493），69×82、84 帧 GIF 合成（超格，自动等比缩小）；演示用，道具栏固定亮齐 4 件',
-    animated: 'pokemon/versions/generation-v/black-white/animated/493.gif',
-    demoAllProps: true,
-  },
+  // ── 国内厂商 ──────────────────────────────────────────────
+  alibaba: gen5('entei', '炎帝', 244),
+  deepseek: gen5('arceus', '阿尔宙斯', 493),
+  zhipuai: showdown('zygarde', '基格尔德', 718),
+  minimax: gen5('celebi', '雪拉比', 251),
+  'bytedance-seed': gen5('chansey', '吉利蛋', 113),
+  moonshotai: gen5('umbreon', '月亮伊布', 197),
+  tencent: gen5('ditto', '百变怪', 132),
+  xiaomi: showdown('alcremie', '霜奶仙', 869),
+  inclusionai: gen5('heracross', '赫拉克罗斯', 214),
+  stepfun: gen5('starmie', '宝石海星', 121),
+  kwaipilot: showdown('duraludon', '铝钢龙', 884),
+  baidu: showdown('poltchageist', '来悲粗茶', 1012),
+  meituan: gen5('dragonite', '快龙', 149),
+
+  // ── 国外厂商 ──────────────────────────────────────────────
+  openai: gen5('giratina', '骑拉帝纳', 487),
+  google: gen5('palkia', '帕路奇亚', 484),
+  mistral: gen5('dialga', '帝牙卢卡', 483),
+  anthropic: showdown('yveltal', '伊裴尔塔尔', 717),
+  meta: showdown('xerneas', '哲尔尼亚斯', 716),
+  xai: gen5('hooh', '凤王', 250),
+  nvidia: gen5('mewtwo', '超梦', 150),
+  cohere: gen5('lugia', '路基亚', 249),
+  amazon: gen5('regigigas', '雷吉奇卡斯', 486),
+  sakana: gen5('feraligatr', '大力鳄', 160),
+  deepreinforce: gen5('mew', '梦幻', 151),
+  ibm: gen5('kyogre', '盖欧卡', 382),
+  microsoft: gen5('groudon', '古拉顿', 383),
+  nousresearch: gen5('kyurem', '酋雷姆', 646),
+  perplexity: gen5('raikou', '雷公', 243),
+  'aion-labs': gen5('suicune', '水君', 245),
+  'arcee-ai': gen5('zapdos', '闪电鸟', 145),
+  inception: gen5('articuno', '急冻鸟', 144),
+  poolside: gen5('moltres', '火焰鸟', 146),
+  upstage: gen5('blastoise', '水箭龟', 9),
+  sao10k: gen5('charizard', '喷火龙', 6),
+  thedrummer: showdown('cinderace', '闪炎王牌', 815),
+  vispark: showdown('inteleon', '千面避役', 818),
+  ai21: gen5('meganium', '大菊花', 154),
+  baai: gen5('typhlosion', '火爆兽', 157),
+  'inference-net': showdown('morpeko', '莫鲁贝可', 877),
+  mindlab: gen5('gengar', '耿鬼', 94),
+  morph: gen5('mismagius', '梦妖魔', 429),
+  openbmb: gen5('wigglytuff', '胖可丁', 40),
+  quiverai: gen5('togekiss', '波克基斯', 468),
+  reflection: gen5('espeon', '太阳伊布', 196),
+  rekaai: gen5('lapras', '拉普拉斯', 131),
+  relace: gen5('chandelure', '水晶灯火灵', 609),
+  sarvam: gen5('snorlax', '卡比兽', 143),
+  scaledown: showdown('greninja', '甲贺忍蛙', 658),
+  stealth: gen5('lucario', '路卡利欧', 448),
+  'swiss-ai': gen5('latias', '拉帝亚斯', 380),
+  thinkingmachines: gen5('latios', '拉帝欧斯', 381),
+  writer: gen5('tyranitar', '班基拉斯', 248),
+  aisingapore: gen5('garchomp', '烈咬陆鲨', 445),
+  'anthracite-org': showdown('greattusk', '雄伟牙', 984),
+  apodex: gen5('pinsir', '凯罗斯', 127),
+  baichuan: showdown('trevenant', '朽木妖', 709),
+  cognitivecomputations: showdown('centiskorch', '焚焰蚣', 851),
+  elorian: gen5('luxray', '伦琴猫', 405),
+  fireworks: showdown('drednaw', '暴噬龟', 834),
+  gryphe: showdown('appletun', '丰蜜龙', 841),
+  liquid: gen5('raichu', '雷丘', 26),
+  mancer: gen5('camerupt', '喷火驼', 323),
+  mixedbread: staticSprite('ogerpon', '厄诡椪', 1017),
+  'motif-technologies': showdown('lunala', '露奈雅拉', 792),
+  'nex-agi': showdown('solgaleo', '索尔迦雷欧', 791),
+  paddlepaddle: showdown('regieleki', '雷吉艾勒奇', 894),
+  perceptron: showdown('zeraora', '捷拉奥拉', 807),
+  sdaia: gen5('kangaskhan', '袋兽', 115),
+  trendyol: gen5('gyarados', '暴鲤龙', 130),
+  typesafe: staticSprite('toxtricity', '颤弦蝾螈', 849),
+  unbiased: gen5('metagross', '巨金怪', 376),
+  undi95: showdown('rillaboom', '轰擂金刚猩', 812),
+  vivgrid: gen5('porygon2', '多边兽乙型', 233),
 };
 
 /** 取某厂商的宝可梦形象；未登记返回 null（调用方回退 chibi）。 */

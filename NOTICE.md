@@ -7,7 +7,8 @@
 
 | 路径 | 内容 | 许可 |
 |---|---|---|
-| `assets/lpc/` · `public/sprites/` | 像素角色素材与合成产物 | CC0 / OGA-BY 3.0 |
+| `assets/lpc/` | 像素角色素材（chibi 合成用） | CC0 / OGA-BY 3.0 |
+| `public/sprites/` | 角色合成产物（chibi 与宝可梦演示形象） | 混合：chibi 部分 CC0 / OGA-BY 3.0；宝可梦部分见第一节之二，仅限本地自用 |
 | `assets/fonts/` · `public/fonts/` | 中文像素字体及其子集 | SIL OFL 1.1 |
 | `data/` | 模型快照与榜单成绩 | 见第三节，逐源不同 |
 
@@ -29,6 +30,24 @@
 逐资产的作者、采用许可与来源链接（269 行、35 位作者）在
 [`assets/lpc/CREDITS.md`](assets/lpc/CREDITS.md)，站内 `/credits/` 页面在构建期读取同一份文件渲染。
 **再分发本仓库或其衍生作品时需保留该署名文件。**
+
+### 一之二、宝可梦演示形象（仅本地自用，不得公开发布）
+
+`scripts/sprites/pokemon.ts` 的 `POKEMON_REGISTRY` 把部分厂商映射到宝可梦形象，构建期从
+[PokeAPI/sprites](https://github.com/PokeAPI/sprites) 拉取素材（经 jsDelivr 镜像），解码后合成进
+`public/sprites/`。图源随图鉴号分三档：
+
+- 图鉴号 1–649：第 5 世代（黑 / 白）动画 GIF，`pokemon/versions/generation-v/black-white/animated/<图鉴号>.gif`；
+- 图鉴号 650+：Showdown 动画 GIF，`pokemon/other/showdown/<图鉴号>.gif`；
+- Showdown 无图的个别物种（如 #849 颤弦蝾螈、#1017 厄诡椪）：正面静态精灵 PNG，`pokemon/<图鉴号>.png`。
+
+**版权归属**：宝可梦（Pokémon）及其角色形象是 Nintendo / Creatures Inc. / GAME FREAK inc. 的
+知识产权，「Pokémon」「宝可梦」为任天堂的商标。PokeAPI/sprites 仓库只提供**代码与目录结构**的开放托管，
+**不对其中的图像授予任何许可**，图像版权仍归原权利人。
+
+**使用范围**：这些形象仅供本项目**本地、个人、非公开**的界面演示；**不得随本仓库或其构建产物对外发布、
+分发或商用**。若要公开发布，必须把 `POKEMON_REGISTRY` 换成原创或已获授权的形象（删除该表即回退到
+CC0 / OGA-BY 3.0 的 chibi 角色）。
 
 ## 二、字体
 

@@ -28,7 +28,7 @@ import { stableStringify } from './lib/stable-json';
 import { normalizeLicense } from './merge/license';
 import { paramsFromSlug, resolveParams, synthesizeSizeTier } from './merge/params';
 import { arbitrateReleaseDate } from './merge/release-date';
-import { shouldPromoteDiscovery, stripServiceTierSuffix } from './merge/build';
+import { epochDateIsTrusted, shouldPromoteDiscovery, stripServiceTierSuffix } from './merge/build';
 import {
   leagueIdFromFile,
   lookupEpochLeagueScores,
@@ -133,6 +133,54 @@ check('单一候选原样返回', arbitrateReleaseDate([
   { source: 'openrouter', value: { iso: '2026-01-05', precision: 'day' }, anchor: false },
 ])?.source, 'openrouter');
 check('无候选返回 null', arbitrateReleaseDate([]), null);
+
+// ── Epoch 发布日期可信度：宽松档命中不得顶替 models.dev 的日期 ────────────────
+// 实测 deepseek-v4.1-flash-1017：Epoch 里没有 1017 这个实体，我们的 slug 归一
+// 把日期戳剥掉后宽松命中基础版 Flash（2026-09-09），该日期以锚点身份进入仲裁、
+// 因「取 min」压过 models.dev 自己写的 2026-10-17。以下规则把它拦在门外。
+check(
+  '宽松档命中 + models.dev 有日期 → 不采信 Epoch 日期',
+  epochDateIsTrusted({ tier: 'loose', modelsDevHasReleaseDate: true }),
+  false,
+);
+check(
+  '严格档命中 + models.dev 有日期 → 采信',
+  epochDateIsTrusted({ tier: 'strict', modelsDevHasReleaseDate: true }),
+  true,
+);
+check(
+  '去参数量档命中 + models.dev 有日期 → 采信',
+  epochDateIsTrusted({ tier: 'param-stripped', modelsDevHasReleaseDate: true }),
+  true,
+);
+check(
+  '宽松档命中但 models.dev 无日期 → 兜底采信',
+  epochDateIsTrusted({ tier: 'loose', modelsDevHasReleaseDate: false }),
+  true,
+);
+check('无 Epoch 命中 → 不采信', epochDateIsTrusted({ tier: null, modelsDevHasReleaseDate: true }), false);
+
+// 复原 1017 的候选池构造（与 merge/build.ts 同一路径）：宽松命中不得入池。
+const md1017 = { iso: '2026-10-17', precision: 'day' } as const;
+const candidates1017 = [{ source: 'models.dev', value: md1017, anchor: true }] as Parameters<
+  typeof arbitrateReleaseDate
+>[0];
+if (epochDateIsTrusted({ tier: 'loose', modelsDevHasReleaseDate: true })) {
+  candidates1017.push({
+    source: 'epoch.ai',
+    value: { iso: '2026-09-09', precision: 'day' },
+    anchor: true,
+  });
+}
+const flash1017 = arbitrateReleaseDate(candidates1017);
+check('1017：宽松 Epoch 命中被拦下，models.dev 的 10-17 胜出', flash1017?.value.iso, '2026-10-17');
+check('1017：日期来源回落到 models.dev', flash1017?.source, 'models.dev');
+// 反证：不拦下时，错误的 09-09 会因「取 min」胜出——这正是修复前 models.json 里的值。
+const unguarded1017 = arbitrateReleaseDate([
+  { source: 'models.dev', value: md1017, anchor: true },
+  { source: 'epoch.ai', value: { iso: '2026-09-09', precision: 'day' }, anchor: true },
+]);
+check('（反证）不拦下宽松命中时，错误的 09-09 会胜出', unguarded1017?.value.iso, '2026-09-09');
 
 // ── id 归一 ───────────────────────────────────────────────────────────
 check('OpenRouter 的 qwen 命名空间归到 alibaba', canonicalizeId('qwen/qwen3.8-flash')?.id, 'alibaba/qwen3.8-flash');
